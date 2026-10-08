@@ -2,6 +2,7 @@
 // Текст "кофе 250" или фото чека -> запись в expenses.csv. /week /month /undo /help
 const fs = require('fs');
 const path = require('path');
+const { execFile } = require('child_process');
 
 // --- .env ---
 const envPath = path.join(__dirname, '.env');
@@ -117,6 +118,13 @@ async function summary(days, title) {
   return `${title}\nВсего: ${total.toLocaleString('ru-RU')} ₽ (${list.length} записей)\n${lines.join('\n')}`;
 }
 
+// --- Перезапуск: pm2 сам поднимет процесс после выхода ---
+// Сначала подтверждаем в Telegram уже обработанные сообщения, чтобы /update не пришёл повторно.
+async function quit() {
+  await tg('getUpdates', { offset, timeout: 0 }).catch(() => {});
+  process.exit(0);
+}
+
 // --- Обработка сообщений ---
 async function handle(msg) {
   const chat = msg.chat.id;
@@ -127,7 +135,19 @@ async function handle(msg) {
   const text = (msg.text || '').trim();
 
   if (text === '/start' || text === '/help') {
-    return say(chat, 'Пиши траты как удобно: «кофе 250», «такси 480 и обед 650» — или присылай фото чека.\n/week — итоги за 7 дней\n/month — за 30 дней\n/undo — удалить последнюю запись');
+    return say(chat, 'Пиши траты как удобно: «кофе 250», «такси 480 и обед 650» — или присылай фото чека.\n/week — итоги за 7 дней\n/month — за 30 дней\n/undo — удалить последнюю запись\n/update — обновить код из GitHub и перезапуститься\n/restart — просто перезапуститься');
+  }
+  if (text === '/restart') {
+    await say(chat, '♻️ Перезапускаюсь...');
+    return quit();
+  }
+  if (text === '/update') {
+    await say(chat, '⏳ Тяну обновления из GitHub...');
+    return execFile('git', ['pull'], { cwd: __dirname }, async (err, out, errOut) => {
+      if (err) return say(chat, 'Ошибка git pull: ' + String(errOut || err.message).slice(0, 500));
+      await say(chat, `${String(out).trim().slice(0, 500)}\n♻️ Перезапускаюсь...`);
+      quit();
+    });
   }
   if (text === '/week') return say(chat, await summary(7, 'Итоги за 7 дней'));
   if (text === '/month') return say(chat, await summary(30, 'Итоги за 30 дней'));
@@ -167,9 +187,9 @@ setInterval(() => {
 }, 60000);
 
 // --- Long polling ---
+let offset = 0;
 (async () => {
   console.log('Бот запущен. Напиши ему в Telegram.');
-  let offset = 0;
   for (;;) {
     try {
       const res = await tg('getUpdates', { offset, timeout: 30 });
