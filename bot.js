@@ -202,6 +202,26 @@ setInterval(() => {
 // --- Long polling ---
 let offset = 0;
 (async () => {
+  try {
+    const commands = [
+      { command: 'week', description: 'Расходы за 7 дней' },
+      { command: 'month', description: 'Расходы за 30 дней' },
+      { command: 'undo', description: 'Удалить последнюю запись' },
+      { command: 'help', description: 'Как пользоваться ботом' },
+      { command: 'restart', description: 'Обновить и перезапустить бота' },
+      { command: 'update', description: 'Скачать обновления и перезапустить' },
+      { command: 'start', description: 'Начать работу и показать справку' },
+    ];
+    const scope = OWNER ? { type: 'chat', chat_id: OWNER } : { type: 'default' };
+    const registered = await tg('setMyCommands', { commands, scope });
+    if (!registered.ok) throw new Error(registered.description || 'Не удалось зарегистрировать команды');
+    const menu = await tg('setChatMenuButton', {
+      ...(OWNER ? { chat_id: OWNER } : {}), menu_button: { type: 'commands' },
+    });
+    if (!menu.ok) throw new Error(menu.description || 'Не удалось включить меню');
+  } catch (e) {
+    console.error('Настройка меню:', e.message);
+  }
   console.log('Бот запущен. Напиши ему в Telegram.');
   for (;;) {
     try {
