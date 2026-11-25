@@ -1,4 +1,4 @@
-// Telegram-бот учёта расходов на OpenAI (gpt-4o-mini). Без зависимостей, Node 18+.
+// Telegram-бот учёта расходов на OpenAI (gpt-6-luna). Без зависимостей, Node 18+.
 // Текст "кофе 250" или фото чека -> запись в expenses.csv. /week /month /undo /help
 const fs = require('fs');
 const path = require('path');
@@ -17,7 +17,7 @@ const KEY = process.env.OPENAI_API_KEY;
 const SHEETS_URL = process.env.SHEETS_URL || '';
 const SHEETS_SECRET = process.env.SHEETS_SECRET || '';
 const OWNER = process.env.ALLOWED_CHAT_ID ? Number(process.env.ALLOWED_CHAT_ID) : null;
-const MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+const MODEL = process.env.OPENAI_MODEL || 'gpt-6-luna';
 if (!TG || !KEY) {
   console.error('Заполни TELEGRAM_BOT_TOKEN и OPENAI_API_KEY в файле .env (см. README)');
   process.exit(1);
@@ -38,7 +38,7 @@ const tg = async (method, body) => {
 };
 const say = (chat_id, text) => tg('sendMessage', { chat_id, text });
 
-// --- Claude: разбор трат ---
+// --- OpenAI: разбор трат ---
 const SYSTEM = `Ты разбираешь траты пользователя. Верни ТОЛЬКО JSON без пояснений:
 {"items":[{"amount":число,"category":"...","description":"кратко"}]}
 Категории строго из списка: ${CATEGORIES.join(', ')}.
@@ -108,9 +108,24 @@ async function undo() {
   return last.split(';');
 }
 
+function reportDate(value) {
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return null;
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Europe/Moscow', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(date);
+  const part = (type) => parts.find((p) => p.type === type).value;
+  return part('year') + '-' + part('month') + '-' + part('day');
+}
+
 async function summary(days, title) {
-  const from = new Date(Date.now() - days * 864e5).toISOString().slice(0, 10);
-  const list = (await rows()).filter((r) => r.date >= from);
+  const to = reportDate(Date.now());
+  const from = new Date(Date.parse(to + 'T00:00:00Z') - (days - 1) * 864e5).toISOString().slice(0, 10);
+  const list = (await rows()).filter((r) => {
+    const date = reportDate(r.date);
+    return date !== null && date >= from && date <= to;
+  });
   if (!list.length) return `${title}: трат нет.`;
   const by = {};
   let total = 0;
@@ -137,15 +152,11 @@ async function handle(msg) {
   const text = (msg.text || '').trim();
 
   if (text === '/start' || text === '/help') {
-    return say(chat, 'Пиши траты как удобно: «кофе 250», «такси 480 и обед 650» — или присылай фото чека.\n/week — итоги за 7 дней\n/month — за 30 дней\n/undo — удалить последнюю запись\n/update — обновить код из GitHub и перезапуститься\n/restart — просто перезапуститься');
+    return say(chat, 'Пиши траты как удобно: «кофе 250», «такси 480 и обед 650» — или присылай фото чека.\n/week — итоги за 7 дней\n/month — за 30 дней\n/undo — удалить последнюю запись\n/update — обновить код из GitHub и перезапуститься\n/restart — обновить код из GitHub и перезапуститься');
   }
-  if (text === '/restart') {
-    await say(chat, '♻️ Перезапускаюсь...');
-    return quit();
-  }
-  if (text === '/update') {
+  if (text === '/restart' || text === '/update') {
     await say(chat, '⏳ Тяну обновления из GitHub...');
-    return execFile('git', ['pull'], { cwd: __dirname }, async (err, out, errOut) => {
+    return execFile('git', ['pull', '--ff-only'], { cwd: __dirname, timeout: 60000, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }, async (err, out, errOut) => {
       if (err) return say(chat, 'Ошибка git pull: ' + String(errOut || err.message).slice(0, 500));
       await say(chat, `${String(out).trim().slice(0, 500)}\n♻️ Перезапускаюсь...`);
       quit();
